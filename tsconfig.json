@@ -4,8 +4,6 @@
     "module": "commonjs",
     "outDir": "dist",
     "sourceMap": true,
-    "composite": true,
-    // "tsBuildInfoFile": "./",               /* Specify file to store incremental compilation information */
     "removeComments": true,
     /* Strict Type-Checking Options */
     "strict": true,
