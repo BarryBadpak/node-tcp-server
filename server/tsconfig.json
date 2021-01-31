@@ -3,6 +3,9 @@
     "target": "ESNext",
     "module": "commonjs",
     "outDir": "dist",
+    "lib": [
+      "ESNext"
+    ],
     "sourceMap": true,
     "removeComments": true,
     /* Strict Type-Checking Options */
