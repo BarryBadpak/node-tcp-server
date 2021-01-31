@@ -19,13 +19,14 @@ export class Message {
     protected bodyBuffer: Buffer = Buffer.alloc(Message.MAX_BODY_SIZE);
     protected offset: number = 0;
     protected length: number = 0;
-
-    public getBodyBuffer(): Buffer {
-        return this.bodyBuffer;
-    }
+    protected checksum: number = 0;
 
     public addString(string: string): void {
         this.addBytes(Buffer.from(string));
+    }
+
+    public addUint8(number: number): void {
+        this.bodyBuffer.writeUInt8(number, this.offset++);
     }
 
     public addBytes(bytes: Buffer): void {
@@ -36,6 +37,18 @@ export class Message {
         this.bodyBuffer.set(bytes, this.offset);
         this.offset += bytes.byteLength;
         this.length += bytes.byteLength;
+    }
+
+    public getBodyBuffer(): Buffer {
+        return this.bodyBuffer;
+    }
+
+    public getUint8(): number {
+        if (!this.canRead(1)) {
+            return 0;
+        }
+
+        return this.bodyBuffer.readUInt8(this.offset++);
     }
 
     public getBytes(numBytes: number): Buffer {
@@ -50,8 +63,28 @@ export class Message {
         return bytes;
     }
 
+    public skipBytes(numBytes: number): void {
+        this.offset += numBytes;
+    }
+
+    public getLength(): number {
+        return this.length;
+    }
+
     public setLength(length: number): void {
         this.length = length;
+    }
+
+    public calcChecksum(): number {
+        return Adler.buf(this.bodyBuffer.subarray(0, this.length), this.length);
+    }
+
+    public getChecksum(): number {
+        return this.checksum;
+    }
+
+    public setChecksum(checksum: number): void {
+        this.checksum = checksum;
     }
 
     private canAdd(numBytes: number): Boolean {
@@ -80,6 +113,9 @@ export class OutMessage extends Message {
     }
 
     private writeChecksum(buffer: Buffer): void {
-        buffer.writeInt32LE(Adler.buf(this.bodyBuffer.subarray(0, this.length)), Message.HEADER_MESSAGE_SIZE_LENGTH);
+        buffer.writeInt32LE(
+            this.calcChecksum(),
+            Message.HEADER_MESSAGE_SIZE_LENGTH
+        );
     }
 }   

@@ -1,4 +1,5 @@
 import {Connection} from './Connection';
+import {Message} from './Message';
 
 export abstract class ProtocolService {
     abstract readonly protocolName: string;
@@ -32,7 +33,9 @@ export abstract class Protocol {
 
     public abstract onConnect(): void;
 
-    public abstract onFirstMessageReceived(message: Buffer): void;
+    public abstract onReceiveMessage(msg: Message): void;
+
+    public abstract onReceiveFirstMessage(msg: Message): void;
 
     public send(message: Buffer): void {
         this.connection.send(message);

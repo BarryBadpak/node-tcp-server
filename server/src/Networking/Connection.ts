@@ -1,7 +1,8 @@
 import Net from 'net';
 import {Protocol} from './Protocol';
 import {Message} from './Message';
-import * as Adler from 'adler-32';
+import {v4 as uuidv4} from 'uuid';
+import {Server} from './Server';
 
 export class ConnectionManager {
     private static instance: ConnectionManager;
@@ -18,8 +19,8 @@ export class ConnectionManager {
         return ConnectionManager.instance;
     }
 
-    public createConnection(socket: Net.Socket): Connection {
-        const connection = new Connection(socket);
+    public createConnection(socket: Net.Socket, server: Server): Connection {
+        const connection = new Connection(uuidv4(), socket, server);
         this.connections.add(connection);
 
         return connection;
@@ -27,6 +28,10 @@ export class ConnectionManager {
 
     public releaseConnection(connection: Connection): void {
         this.connections.delete(connection);
+    }
+
+    public getAll(): Set<Connection> {
+        return this.connections;
     }
 
     public closeAll(): void {
@@ -39,114 +44,200 @@ export class ConnectionManager {
 }
 
 export class Connection {
-    private socket: Net.Socket;
-    private protocol: Protocol | undefined;
-    private messageQueue: Message[] = [];
-    private messageBuffers: Buffer[] = [];
+    private static READ_TIMEOUT_MS = 30000;
 
-    constructor(socket: Net.Socket) {
+    private readonly uuid: string;
+    private socket: Net.Socket;
+    private server: Server;
+
+    private protocol: Protocol | null = null;
+
+    private msg: Message | undefined;
+    private receivedFirstMessage: boolean = false;
+
+    private cancelReadPromise: (value?: unknown) => void = () => {
+    };
+
+    constructor(uuid: string, socket: Net.Socket, server: Server) {
+        this.uuid = uuid;
         this.socket = socket;
+        this.server = server;
     }
 
     public acceptProtocol(protocol: Protocol): void {
         this.protocol = protocol;
+        this.accept();
     }
 
     public accept(): void {
+        this.log('Connected');
         this.socket.on('timeout', this.handleTimeout.bind(this));
-        // this.socket.on('end', this.handleDisconnected.bind(this));
+        this.socket.on('end', this.handleEnd.bind(this));
 
-        this.socket.on('data', this.readDataIntoBuffer.bind(this));
-    }
-
-    private readDataIntoBuffer(buffer: Buffer) {
-        // The data event does not guarantee that the given buffer contains a full message
-        // So we should keep a larger buffer and only handle a message if we got a full message
-
-        console.log(`Socket ${this.socket.remoteAddress} - Added buffer to messageBuffer`);
-        this.socket.write(`Socket ${this.socket.remoteAddress} - Added buffer to messageBuffer`);
-        this.messageBuffers.push(buffer);
-        this.processMessageBuffer();
-
-        if (this.messageBuffers.length === 12122) {
-            if (this.protocol) {
-                this.protocol.parsePacket(Buffer.from(''));
-            }
-        }
-    }
-
-    private processMessageBuffer() {
-        const buffer = this.messageBuffers.shift();
-        if (!buffer) {
-            return;
-        }
-
-        let bufferOffset = 0;
-
-        let messageBody;
-        let messageBodyOffset = 0;
-        let messageLength;
-        let checksum;
-
-        this.socket.read();
-        do {
-            if (!messageLength) {
-                messageLength = buffer.readUInt16LE(bufferOffset);
-                bufferOffset += 2;
-            }
-
-            checksum = buffer.readInt32LE(Message.HEADER_MESSAGE_SIZE_LENGTH);
-            bufferOffset += 4;
-
-            messageBody = Buffer.alloc(messageLength);
-
-            // If the buffer length is smaller then the message length
-            if (buffer.byteLength < (messageLength + Message.HEADER_SIZE)) {
-                buffer.copy(messageBody, messageBodyOffset, messageBodyOffset, Message.BODY_OFFSET);
-                messageBodyOffset = buffer.byteLength - Message.BODY_OFFSET;
-                continue;
-
-            }
-            buffer.copy(messageBody, messageBodyOffset, Message.BODY_OFFSET, Message.BODY_OFFSET + messageLength);
-            bufferOffset += Message.HEADER_SIZE + messageLength;
-
-            const verifyChecksum = Adler.buf(messageBody);
-            if (checksum !== verifyChecksum) {
-                console.log('Connection: Checksum verification failed');
-                continue;
-            }
-
-            const message = new Message();
-            message.setLength(messageLength);
-            messageBody.copy(message.getBodyBuffer(), 0, 0);
-
-
-            messageBody = undefined;
-            messageBodyOffset = 0;
-            messageLength = undefined;
-            checksum = undefined;
-
-            console.log('Push message');
-            this.messageQueue.push(message);
-        } while (bufferOffset < buffer.byteLength);
+        this.parseMessages();
     }
 
     public send(message: Buffer): void {
         this.socket.write(message);
     }
 
-    public close(force: boolean = false): void {
-        ConnectionManager.getInstance().releaseConnection(this);
+    public close(): void {
+        this.log('Close client socket');
 
-        if (force) {
-            this.socket.destroy();
+        this.cancelReadPromise();
+        this.cancelReadPromise();
+
+        ConnectionManager.getInstance().releaseConnection(this);
+        this.socket.destroy();
+    }
+
+    private parseMessages(): void {
+        this.executeReadPromise(this.parseMessageHeader(), Connection.READ_TIMEOUT_MS)
+            .then(() => {
+                if (this.socket.destroyed) {
+                    return;
+                }
+
+                return this.executeReadPromise(this.parseMessageBody(), Connection.READ_TIMEOUT_MS)
+                    .then(() => {
+                        if (!this.socket.destroyed) {
+                            this.parseMessages();
+                        }
+                    })
+                    .catch((error) => {
+                        this.log(`Body parse error: ${error}`);
+                        this.handleTimeout();
+                    });
+            })
+            .catch((error) => {
+                this.log(`Header parse error: ${error}`);
+                this.handleTimeout();
+            });
+    }
+
+    private async parseMessageHeader(): Promise<void> {
+        const header = await this.readBytes(Message.HEADER_SIZE);
+        if (!header) {
+            this.log('Message header could not be read from internal buffer');
+            this.close();
             return;
         }
 
-        this.socket.end();
+        // Check if too many packets have been sent per/s
+
+        const messageLength = header.readInt16LE();
+        if (messageLength == 0 || messageLength > Message.MAX_BODY_SIZE) {
+            this.log(`Invalid message length ${messageLength}`);
+            this.close();
+            return;
+        }
+
+        const checksum = header.readInt32LE(Message.HEADER_MESSAGE_SIZE_LENGTH);
+
+        this.msg = new Message();
+        this.msg.setLength(messageLength);
+        this.msg.setChecksum(checksum);
     }
 
-    public handleTimeout(): void {
-        this.close(true);
+    private async parseMessageBody(): Promise<void> {
+        if (!this.msg) {
+            this.close();
+            return;
+        }
+
+        const messageBodyBuffer = await this.readBytes(this.msg.getLength());
+        if (!messageBodyBuffer) {
+            this.log('Message body could not be read from internal buffer');
+            this.close();
+            return;
+        }
+
+        this.msg.getBodyBuffer().set(messageBodyBuffer);
+        if (this.msg.calcChecksum() !== this.msg.getChecksum()) {
+            this.log(`Message checksum (${this.msg.getChecksum()} does not match calculated checksum (${this.msg.calcChecksum()})`);
+        }
+
+        this.log(`Incoming message with length ${this.msg.getLength()}`);
+
+        if (!this.receivedFirstMessage) {
+            this.receivedFirstMessage = true;
+
+            if (!this.protocol) {
+                this.protocol = this.server.makeProtocol(this.msg, this);
+                if (!this.protocol) {
+                    this.log('Invalid protocolId in message');
+                    this.close();
+                    return;
+                }
+            } else {
+                this.msg.skipBytes(1);
+            }
+
+            this.protocol.onReceiveFirstMessage(this.msg);
+            return;
+        }
+
+        if (!this.protocol) {
+            this.close();
+            return;
+        }
+
+        this.protocol.onReceiveMessage(this.msg);
+    }
+
+    private handleTimeout(): void {
+        this.log('Connection timed out');
+        this.close();
+    }
+
+    private handleEnd(): void {
+        this.log('Client closed connection');
+        this.close();
+    }
+
+    private async readable(): Promise<void> {
+        return new Promise((resolve) => {
+            this.socket.once('readable', resolve);
+        });
+    };
+
+    private async readBytes(num: number, tries: number = 0): Promise<Buffer | null> {
+        let buffer: Buffer | undefined;
+
+        buffer = this.socket.read(num);
+        if (buffer) {
+            return buffer;
+        }
+
+        if (tries == 30) {
+            return null;
+        }
+
+        return new Promise((resolve) => {
+            this.readable().then(() => {
+                this.readBytes(num, ++tries).then((buffer) => {
+                    resolve(buffer);
+                });
+            });
+        });
+    }
+
+    private executeReadPromise(promise: Promise<any>, ms: number) {
+        const timeoutPromise = new Promise((_resolve, reject) => {
+            let id = setTimeout(() => {
+                clearTimeout(id);
+                reject(`Timed out in ${ms}ms.`);
+            }, ms);
+        });
+
+        return Promise.race([
+            promise,
+            timeoutPromise,
+            new Promise((resolve) => this.cancelReadPromise = resolve)
+        ]);
+    }
+
+    private log(msg: string): void {
+        console.log(`[Server] ${this.server.getUuid()} [Socket] ${this.uuid} - ${msg}`);
     }
 }
