@@ -53,8 +53,6 @@ const client2 = net.createConnection({port: 8125}, () => {
         client2.write(outMessage2.getOutputBuffer());
     }, 2000);
 
-    // Waarom crasht deze niet? Dit bericht bevat geen ProtocolId dus hij zou geen protocol moeten
-    // kunnen maken en de socket moeten sluiten
     client2.on('error', (error) => {
         console.log(`[Client] Error - ${error}`);
         clearInterval(intervalId);
