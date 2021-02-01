@@ -34,43 +34,73 @@ class TestProtocolService extends ProtocolService {
 const serverManager = new ServerManager();
 serverManager.add(new TestProtocolService(), 8125);
 
-const client = net.createConnection({port: 8125}, () => {
-    const outMessage = new OutMessage();
-    outMessage.addUint8(1);
-    outMessage.addString('bericht_1');
+function createClient(msg: string, interval: number = 100) {
+    const client = net.createConnection({port: 8125}, () => {
+        const outMessage = new OutMessage();
+        outMessage.addUint8(1);
+        outMessage.addString(msg);
 
-    console.log('[Client] User connected');
+        console.log('[Client] User connected');
 
-    const intervalId = setInterval(() => {
-        client.write(outMessage.getOutputBuffer());
-    }, 2000);
+        const intervalId = setInterval(() => {
+            client.write(outMessage.getOutputBuffer());
+        }, interval);
 
-    client.on('error', (error) => {
-        console.log(`[Client] Error - ${error}`);
-        clearInterval(intervalId);
+        client.on('error', (error) => {
+            console.log(`[Client] Error - ${error}`);
+            clearInterval(intervalId);
+        });
+
+        client.on('end', () => {
+            console.log(`[Client] Connection closed by remote`);
+            clearInterval(intervalId);
+        });
     });
+}
 
-    client.on('end', () => {
-        console.log(`[Client] Connection closed by remote`);
-        clearInterval(intervalId);
-    });
-});
+for (let i = 0; i < 25; i++) {
+    createClient(`Bericht ${i + 1}`);
+}
 
-const client2 = net.createConnection({port: 8125}, () => {
-    const outMessage2 = new OutMessage();
-    outMessage2.addString('bericht 2');
+// Valid protocol message sending
+// const client = net.createConnection({port: 8125}, () => {
+//     const outMessage = new OutMessage();
+//     outMessage.addUint8(1);
+//     outMessage.addString('bericht_1');
+//
+//     console.log('[Client] User connected');
+//
+//     const intervalId = setInterval(() => {
+//         client.write(outMessage.getOutputBuffer());
+//     }, 2000);
+//
+//     client.on('error', (error) => {
+//         console.log(`[Client] Error - ${error}`);
+//         clearInterval(intervalId);
+//     });
+//
+//     client.on('end', () => {
+//         console.log(`[Client] Connection closed by remote`);
+//         clearInterval(intervalId);
+//     });
+// });
 
-    const intervalId = setInterval(() => {
-        client2.write(outMessage2.getOutputBuffer());
-    }, 2000);
-
-    client2.on('error', (error) => {
-        console.log(`[Client] Error - ${error}`);
-        clearInterval(intervalId);
-    });
-
-    client2.on('end', () => {
-        console.log(`[Client] Connection closed by remote`);
-        clearInterval(intervalId);
-    });
-});
+// Invalid protocol message sending
+// const client2 = net.createConnection({port: 8125}, () => {
+//     const outMessage2 = new OutMessage();
+//     outMessage2.addString('bericht 2');
+//
+//     const intervalId = setInterval(() => {
+//         client2.write(outMessage2.getOutputBuffer());
+//     }, 2000);
+//
+//     client2.on('error', (error) => {
+//         console.log(`[Client] Error - ${error}`);
+//         clearInterval(intervalId);
+//     });
+//
+//     client2.on('end', () => {
+//         console.log(`[Client] Connection closed by remote`);
+//         clearInterval(intervalId);
+//     });
+// });
