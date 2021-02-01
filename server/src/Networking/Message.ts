@@ -27,6 +27,7 @@ export class Message {
 
     public addUint8(number: number): void {
         this.bodyBuffer.writeUInt8(number, this.offset++);
+        this.length++;
     }
 
     public addBytes(bytes: Buffer): void {
@@ -92,7 +93,7 @@ export class Message {
     }
 
     private canRead(numBytes: number): Boolean {
-        return numBytes >= (Message.MAX_BODY_SIZE - this.offset);
+        return numBytes < (Message.MAX_BODY_SIZE - this.offset);
     }
 }
 

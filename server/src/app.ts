@@ -34,16 +34,27 @@ class TestProtocolService extends ProtocolService {
 const serverManager = new ServerManager();
 serverManager.add(new TestProtocolService(), 8125);
 
-// const client = net.createConnection({port: 8125}, () => {
-//     const outMessage = new OutMessage();
-//     outMessage.addUint8(0);
-//     outMessage.addString('bericht 1');
-//
-//     console.log('[Client] User connected');
-//     setInterval(() => {
-//         client.write(outMessage.getOutputBuffer());
-//     }, 2000);
-// });
+const client = net.createConnection({port: 8125}, () => {
+    const outMessage = new OutMessage();
+    outMessage.addUint8(1);
+    outMessage.addString('bericht_1');
+
+    console.log('[Client] User connected');
+
+    const intervalId = setInterval(() => {
+        client.write(outMessage.getOutputBuffer());
+    }, 2000);
+
+    client.on('error', (error) => {
+        console.log(`[Client] Error - ${error}`);
+        clearInterval(intervalId);
+    });
+
+    client.on('end', () => {
+        console.log(`[Client] Connection closed by remote`);
+        clearInterval(intervalId);
+    });
+});
 
 const client2 = net.createConnection({port: 8125}, () => {
     const outMessage2 = new OutMessage();
