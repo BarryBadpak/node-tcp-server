@@ -101,7 +101,9 @@ export class Connection {
                 return this.executeReadPromise(this.parseMessageBody(), Connection.READ_TIMEOUT_MS)
                     .then(() => {
                         if (!this.socket.destroyed) {
-                            this.parseMessages();
+                            setImmediate(() => {
+                                this.parseMessages();
+                            });
                         }
                     })
                     .catch((error) => {
